@@ -8,8 +8,10 @@ vi /etc/ssh/sshd_config
 Set PasswordAuthentication yes
 systemctl restart sshd
 ```
-### Provide root access to discovery user
+### Create discovery user and provide root access to discovery user
 ```
+useradd discovery
+passwd discovery
 visudo
 # Set following for discovery user
 discovery ALL=(ALL) ALL
@@ -42,7 +44,7 @@ hostnamectl set-hostname slave-02
 
 ### Make a hostname entry for all nodes:
 ```
-vi /ect/hosts
+vi /etc/hosts
 ## Add entries
 172.31.35.57 master ip-172-31-35-57.ap-southeast-1.compute.internal
 172.31.40.243 worker ip-172-31-40-243.ap-southeast-1.compute.internal
