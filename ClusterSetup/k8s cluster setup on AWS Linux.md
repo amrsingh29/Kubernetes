@@ -174,7 +174,7 @@ kubeadm config images pull
 ```
 **_NOTE:_** Make sure the pod network CIDR is different than host network CIDR
 ```
-kubeadm init --pod-network-cidr=192.168.0.0/16
+kubeadm init --apiserver-advertise-address=INSTANCE_PRIVATE_IP --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=all
 ```
 ### To star using cluster using kubectl using regualr user
 Switch to regular user and run following commands
