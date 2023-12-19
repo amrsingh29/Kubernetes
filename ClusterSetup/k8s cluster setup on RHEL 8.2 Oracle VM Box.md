@@ -198,7 +198,14 @@ kubeadm config images pull
 ```
 **_NOTE:_** Make sure the pod network CIDR is different than host network CIDR.
 ```
-kubeadm init --apiserver-advertise-address=192.168.56.39 --pod-network-cidr=10.0.0.0/8
+kubeadm init --apiserver-advertise-address=192.168.56.39 --pod-network-cidr=192.168.0.0/16
+```
+### To star using cluster using kubectl using regualr user
+Switch to regular user and run following commands
+```
+mkdir -p $HOME/.kube
+cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+chown $(id -u):$(id -g) $HOME/.kube/config
 ```
 
 ## Update the IP table to add the kubernetes service IP to route traiffce to node IP
@@ -233,16 +240,6 @@ Since IP of kube-dns is 10.96.0.10 then, the valid range for iptable rule would 
 # iptables -t nat -I KUBE-SERVICES -d 10.96.0.1/32 -p tcp -m comment --comment "default/kubernetes:https cluster IP" -m tcp --dport 443 -j KUBE-MARK-MASQ
 ```
 
-
-
-
-### To star using cluster using kubectl using regualr user
-Switch to regular user and run following commands
-```
-mkdir -p $HOME/.kube
-cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-chown $(id -u):$(id -g) $HOME/.kube/config
-```
 
 ### Install any CNI plugin. We will use weavenet
 Check the latest version of CNI weavenet plugin [here](https://github.com/weaveworks/weave/releases)
