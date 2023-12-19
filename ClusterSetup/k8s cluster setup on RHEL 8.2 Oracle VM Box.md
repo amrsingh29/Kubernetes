@@ -1,4 +1,4 @@
-# Kubernetes cluster Setup on AWS Using Kubeadm and Containerd
+# Kubernetes cluster Setup on REHL 8.2 & CentOS 7 Using Kubeadm and Containerd
 
 ## BMC specific configuration on each nodes
 
@@ -15,6 +15,15 @@ passwd discovery
 visudo
 # Set following for discovery user
 discovery ALL=(ALL) ALL
+```
+
+### Create patrol user and provide root access to patrol user
+```
+useradd patrol
+passwd patrol
+visudo
+# Set following for patrol user
+patrol ALL=(ALL) ALL
 ```
 
 ## Prerequisites
@@ -50,6 +59,9 @@ vi /etc/hosts
 172.31.40.243 worker ip-172-31-40-243.ap-southeast-1.compute.internal
 ```
 
+### Firewall setting
+You can decide to either disable firewall on all nodes or can update firewall with below mentioned reules.
+#### Setup fireall setting
 - Certain ports are open on your machines(https://kubernetes.io/docs/reference/ports-and-protocols/)
   - On Master Node
 	```
@@ -66,6 +78,10 @@ vi /etc/hosts
 	10248-10260 for Kubelet API etc
 	30000-32767 for NodePort Services
 	```
+#### Disable the firewalld on all nodes
+	systemctl stop firewalld
+	systemctl disable firewalld
+	systemctl status firewalld
 
 ### Disable SWAP
 You MUST disable swap in order for the kubelet to work properly 
@@ -78,6 +94,37 @@ sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 ```
 setenforce 0
 sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+```
+
+### Forwarding IPv4 and letting iptables see bridged traffic
+https://kubernetes.io/docs/setup/production-environment/container-runtimes/#forwarding-ipv4-and-letting-iptables-see-bridged-traffic
+```
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# sysctl params required by setup, params persist across reboots
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+
+# Apply sysctl params without reboot
+sudo sysctl --system
+```
+Verify that the br_netfilter, overlay modules are loaded by running the following commands:
+```
+lsmod | grep br_netfilter
+lsmod | grep overlay
+```
+Verify that the net.bridge.bridge-nf-call-iptables, net.bridge.bridge-nf-call-ip6tables, and net.ipv4.ip_forward system variables are set to 1 in your sysctl config by running the following command:
+```
+sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables net.ipv4.ip_forward
 ```
 
 ### Install Containerd
@@ -129,29 +176,6 @@ pull-image-on-create: false
 EOF
 ```
 
-### Forwarding IPv4 and letting iptables see bridged traffic
-https://kubernetes.io/docs/setup/production-environment/container-runtimes/#forwarding-ipv4-and-letting-iptables-see-bridged-traffic
-```
-cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
-overlay
-br_netfilter
-EOF
-
-modprobe overlay
-modprobe br_netfilter
-
-cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-iptables = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward = 1
-EOF
-
-sysctl --system
-sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables net.ipv4.ip_forward
-modprobe br_netfilter
-sysctl -p /etc/sysctl.conf
-```
-
 ### Install kubectl, kubelet and kubeadm
 ```
 cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
@@ -174,8 +198,44 @@ kubeadm config images pull
 ```
 **_NOTE:_** Make sure the pod network CIDR is different than host network CIDR.
 ```
-kubeadm init --apiserver-advertise-address=192.168.56.30 --pod-network-cidr=192.168.0.0/16
+kubeadm init --apiserver-advertise-address=192.168.56.39 --pod-network-cidr=10.0.0.0/8
 ```
+
+## Update the IP table to add the kubernetes service IP to route traiffce to node IP
+https://stackoverflow.com/questions/39872332/how-to-fix-weave-net-crashloopbackoff-for-the-second-node
+Error we reveice if IP table is not updated.
+```
+
+[root@master ~]# kubectl get pods -n kube-system
+NAME                             READY   STATUS             RESTARTS      AGE
+coredns-5dd5756b68-lqhdp         1/1     Running            0             15m
+coredns-5dd5756b68-tbtwd         1/1     Running            0             15m
+etcd-master                      1/1     Running            0             15m
+kube-apiserver-master            1/1     Running            0             15m
+kube-controller-manager-master   1/1     Running            0             15m
+kube-proxy-2gr7r                 1/1     Running            0             15m
+kube-proxy-q89nl                 1/1     Running            0             13m
+kube-scheduler-master            1/1     Running            0             15m
+weave-net-fgwx7                  2/2     Running            1 (14m ago)   14m
+weave-net-m4xrk                  1/2     CrashLoopBackOff   5 (58s ago)   7m8s
+
+```
+Find the Kubernetes service IP
+```
+# kubectl get svc -n kube-system
+
+NAME        TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+kubernetes  ClusterIP   10.96.0.1        <none>        443/TCP   14m
+```
+
+Since IP of kube-dns is 10.96.0.10 then, the valid range for iptable rule would be 10.96.0.1/32
+```
+# iptables -t nat -I KUBE-SERVICES -d 10.96.0.1/32 -p tcp -m comment --comment "default/kubernetes:https cluster IP" -m tcp --dport 443 -j KUBE-MARK-MASQ
+```
+
+
+
+
 ### To star using cluster using kubectl using regualr user
 Switch to regular user and run following commands
 ```
@@ -189,6 +249,24 @@ Check the latest version of CNI weavenet plugin [here](https://github.com/weavew
 ```
 kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml
 ```
+#### Wait for weave to install & check the status
+```
+kubectl get pods -n kube-system
+```
+Output:
+```
+[root@master ~]# kubectl get pods -n kube-system
+NAME                             READY   STATUS    RESTARTS        AGE
+coredns-5dd5756b68-clzhk         1/1     Running   0               21m
+coredns-5dd5756b68-n89gw         1/1     Running   0               21m
+etcd-master                      1/1     Running   0               21m
+kube-apiserver-master            1/1     Running   0               21m
+kube-controller-manager-master   1/1     Running   2 (9m34s ago)   21m
+kube-proxy-58gtd                 1/1     Running   0               21m
+kube-scheduler-master            1/1     Running   2 (9m34s ago)   21m
+weave-net-mhxzl                  2/2     Running   1 (18m ago)     19m
+```
+
 
 ## Run on Slave Nodes 
 Run the join command obtained from kubeadm init output on all Workers nodes. Example
@@ -196,11 +274,56 @@ Run the join command obtained from kubeadm init output on all Workers nodes. Exa
 kubeadm join \
 192.168.56.2:6443 --token … --discovery-token-ca-cert-hash sha256 . . . .
 ```
+Output:
+
+```
+[root@worker ~]# kubeadm join 192.168.56.49:6443 --token rfi1wo.whirxh99po40b6m8 \
+>         --discovery-token-ca-cert-hash sha256:f1971898756dadd83c55c27xxxxxxxxxxxxxxxxx96f8c74
+[preflight] Running pre-flight checks
+[preflight] Reading configuration from the cluster...
+[preflight] FYI: You can look at this config file with 'kubectl -n kube-system get cm kubeadm-config -o yaml'
+[kubelet-start] Writing kubelet configuration to file "/var/lib/kubelet/config.yaml"
+[kubelet-start] Writing kubelet environment file with flags to file "/var/lib/kubelet/kubeadm-flags.env"
+[kubelet-start] Starting the kubelet
+[kubelet-start] Waiting for the kubelet to perform the TLS Bootstrap...
+
+This node has joined the cluster:
+* Certificate signing request was sent to apiserver and a response was received.
+* The Kubelet was informed of the new secure connection details.
+
+Run 'kubectl get nodes' on the control-plane to see this node join the cluster.
+
+```
 
 ## Test the setup
 ```
 kubectl get nodes
+```
+Output:
+```
+[root@master ~]# kubectl get nodes
+NAME     STATUS   ROLES           AGE     VERSION
+master   Ready    control-plane   24m     v1.28.2
+worker   Ready    <none>          2m29s   v1.28.2
+```
+Check all running pods
+```
 kubectl get pods -A
+```
+Output:
+```
+[root@master ~]# kubectl get pods -A
+NAMESPACE     NAME                             READY   STATUS    RESTARTS      AGE
+kube-system   coredns-5dd5756b68-clzhk         1/1     Running   0             25m
+kube-system   coredns-5dd5756b68-n89gw         1/1     Running   0             25m
+kube-system   etcd-master                      1/1     Running   0             25m
+kube-system   kube-apiserver-master            1/1     Running   0             25m
+kube-system   kube-controller-manager-master   1/1     Running   2 (13m ago)   25m
+kube-system   kube-proxy-58gtd                 1/1     Running   0             25m
+kube-system   kube-proxy-dg4gm                 1/1     Running   0             3m12s
+kube-system   kube-scheduler-master            1/1     Running   2 (13m ago)   25m
+kube-system   weave-net-mhxzl                  2/2     Running   1 (22m ago)   23m
+kube-system   weave-net-q948n                  2/2     Running   0             3m12s
 ```
 
 ## Run a demo app
